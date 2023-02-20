@@ -8,8 +8,8 @@ from utils import local_to_world_grid, world_to_local_grid, sample
 ti.init(ti.gpu)
 
 #Local Grid Properties (Note that world grid is automatically defined with the properties we defined)
-n_x = 3 #Number of cells in the x axis (j axis actually)
-n_y = 3 #Number of cells in the y axis (i axis actually)
+n_x = 16 #Number of cells in the x axis (j axis actually)
+n_y = 16 #Number of cells in the y axis (i axis actually)
 num_cells = (n_y, n_x) # (num_cells_in_y, num_cells_in_x)
 h = 1 #Grid Spacing
 #Grid Fields
@@ -180,15 +180,16 @@ def self_advection(uf: ti.template(), uf_new: ti.template(), vf: ti.template(), 
             #Sample u and v components from the corresponding grids
             u_sample = uf[i, j]
             v_sample = sample(vf, ti.Vector([i_v, j_v]))
+            backtraced_pos = ti.Vector([0.0, 0.0])
             if ti.static(RK == 1):
-                p = RK_1(ti.Vector([x, y]), ti.Vector([u_sample, v_sample]), dt)
+                backtraced_pos = RK_1(ti.Vector([x, y]), ti.Vector([u_sample, v_sample]), dt)
             elif ti.static(RK == 2):
-                p = RK_2(ti.Vector([x, y]), ti.Vector([u_sample, v_sample]), dt, uf, vf)
+                backtraced_pos = RK_2(ti.Vector([x, y]), ti.Vector([u_sample, v_sample]), dt, uf, vf)
             elif ti.static(RK == 3):
-                p = RK_3(ti.Vector([x, y]), ti.Vector([u_sample, v_sample]), dt, uf, vf)
+                backtraced_pos = RK_3(ti.Vector([x, y]), ti.Vector([u_sample, v_sample]), dt, uf, vf)
             
             #Now we have the backtraced position we can sample the u value there
-            i_u, j_u = world_to_local_grid(p[0], p[1], num_cells, h, W_TO_L_U_OFFSET)
+            i_u, j_u = world_to_local_grid(backtraced_pos[0], backtraced_pos[1], num_cells, h, W_TO_L_U_OFFSET)
             uf_new[i, j] = sample(uf, ti.Vector([i_u, j_u]))            
             
     #Loop over the fluid v components
@@ -200,16 +201,19 @@ def self_advection(uf: ti.template(), uf_new: ti.template(), vf: ti.template(), 
             #Sample u and v components from the corresponding grids
             v_sample = vf[i, j]
             u_sample = sample(uf, ti.Vector([i_u, j_u]))
+            backtraced_pos = ti.Vector([0.0, 0.0])
             if ti.static(RK == 1):
-                p = RK_1(ti.Vector([x, y]), ti.Vector([u_sample, v_sample]), dt)
+                backtraced_pos = RK_1(ti.Vector([x, y]), ti.Vector([u_sample, v_sample]), dt)
             elif ti.static(RK == 2):
-                p = RK_2(ti.Vector([x, y]), ti.Vector([u_sample, v_sample]), dt, uf, vf)
+                backtraced_pos = RK_2(ti.Vector([x, y]), ti.Vector([u_sample, v_sample]), dt, uf, vf)
             elif ti.static(RK == 3):
-                p = RK_3(ti.Vector([x, y]), ti.Vector([u_sample, v_sample]), dt, uf, vf)
+                backtraced_pos = RK_3(ti.Vector([x, y]), ti.Vector([u_sample, v_sample]), dt, uf, vf)
             
             #Now we have the backtraced position we can sample the u value there
-            i_v, j_v = world_to_local_grid(p[0], p[1], num_cells, h, W_TO_L_V_OFFSET)
+            i_v, j_v = world_to_local_grid(backtraced_pos[0], backtraced_pos[1], num_cells, h, W_TO_L_V_OFFSET)
             vf_new[i, j] = sample(vf, ti.Vector([i_v, j_v])) 
+
+
 
 
 
@@ -217,5 +221,4 @@ def self_advection(uf: ti.template(), uf_new: ti.template(), vf: ti.template(), 
 self_advection(u_buffers.cur, u_buffers.next, v_buffers.cur, v_buffers.next)
 u_buffers.swap()
 v_buffers.swap()
-print(u_buffers)
-
+print(u_buffers.cur)
