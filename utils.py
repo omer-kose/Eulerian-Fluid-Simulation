@@ -118,9 +118,8 @@ def sample(f: ti.template(), p: ti.template()) -> ti.f32:
     """
     i, j = ti.cast(ti.floor(p[0]), dtype=ti.i32), ti.cast(ti.floor(p[1]), dtype=ti.i32) 
     ip, jp = ti.min(i+1, f.shape[0]-1), ti.min(j+1, f.shape[1]-1)
-    s, t = p[0] - i, p[1] - j
+    t, s = p[0] - i, p[1] - j
     return (f[i, j] * (1-s) + f[i, jp] * s) * (1-t) + (f[ip, j] * (1-s) + f[ip, jp] * s) * t
-
 
 
 
