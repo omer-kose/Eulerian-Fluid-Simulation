@@ -7,8 +7,8 @@ from utils import local_to_world_grid, world_to_local_grid, sample
 ti.init(arch=ti.gpu) 
 
 #Local Grid Properties (Note that world grid is automatically defined with the properties we defined)
-n_x = 512 #Number of cells in the x axis (j axis actually)
-n_y = 512 #Number of cells in the y axis (i axis actually)
+n_x = 128 #Number of cells in the x axis (j axis actually)
+n_y = 128 #Number of cells in the y axis (i axis actually)
 num_cells = (n_y, n_x) # (num_cells_in_y, num_cells_in_x)
 h = 1 #Grid Spacing
 #Grid Fields
@@ -305,7 +305,7 @@ def vel_handle_no_slip_boundary_condition(uf: ti.template(), vf: ti.template()):
     
 
 @ti.kernel
-def compute_divergence(uf: ti.template(), vf: ti.template(), h: ti.template(), divf: ti.template()):
+def compute_divergence(uf: ti.template(), vf: ti.template(), divf: ti.template()):
     """
     Compute the divergence field. Operation is done on divf in-place.
 
@@ -313,13 +313,12 @@ def compute_divergence(uf: ti.template(), vf: ti.template(), h: ti.template(), d
     ----------
     uf: u component field
     vf: v component field
-    h: world grid spacing (necessary for derivative computation)
     divf: divergence field
     """ 
     shape = divf.shape
     for i in range(1, shape[0]-1):
         for j in range(1, shape[1]-1):
-            divf[i, j] = ((uf[i, j+1] - uf[i, j]) / h) + ((vf[i, j] - vf[i, j+1]) / h) 
+            divf[i, j] = ((uf[i, j+1] - uf[i, j]) / h) + ((vf[i, j] - vf[i+1, j]) / h) 
 
 
 
@@ -405,11 +404,11 @@ def simulate():
             advect_quantity(dye_buffers.cur, dye_buffers.next, u_buffers.cur, v_buffers.cur)
             dye_buffers.swap()
             #External Forces
-            apply_gravity(v_buffers.cur)
+            #apply_gravity(v_buffers.cur)
             #Handle boundary conditions
             vel_handle_no_slip_boundary_condition(u_buffers.cur, v_buffers.cur)
             #Projection 
-            compute_divergence(u_buffers.cur, v_buffers.cur, h, div)
+            compute_divergence(u_buffers.cur, v_buffers.cur, div)
             solve_pressure_jacobi()
             projection(u_buffers.cur, u_buffers.next, v_buffers.cur, v_buffers.next, p_buffers.cur)
             u_buffers.swap()
@@ -426,8 +425,33 @@ def init_simulation():
         for j in range(1, dye_buffers.cur.shape[1]-1):
             if(i // 4 + j // 4 ) % 2 == 0:
                 dye_buffers.cur[i, j] = 1.0
+                u_buffers.cur[i, j] = 1.0
+                #v_buffers.cur[i, j] = 1.0
+    
+    p_buffers.cur.fill(0.0)
 
 
+"""
+window_height = n_y 
+window_width = n_x
+pixels = ti.field(dtype=ti.f32, shape=(window_height, window_width))
+
+
+@ti.kernel
+def fill_pixels(qf: ti.template()):
+    q_shape = qf.shape
+    #Number of repeats hat will be mapped onto the same pixel for each quantity.
+    num_repeat = (window_height * window_width) // (q_shape[0] * q_shape[1])
+    num_repeat = ti.cast(ti.sqrt(num_repeat), dtype=ti.i32) 
+    p = 0
+    for i, j in qf:
+        for k in range(num_repeat):
+            row = p // window_width
+            pixels[row, p - row * window_width] = qf[i, j]
+            pixels[row, p - row * window_width] = 1.0 
+            p += 1 
+
+"""
 
 init_simulation()
 gui = ti.GUI("Eulerian Fluid Simulation", res=(n_y, n_x))
@@ -441,5 +465,6 @@ while gui.running:
             pause = not pause
     
     simulate()
+    #fill_pixels(dye_buffers.cur)
     gui.set_image(dye_buffers.cur)
     gui.show()
