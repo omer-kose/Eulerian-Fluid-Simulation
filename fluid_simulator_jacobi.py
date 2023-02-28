@@ -7,8 +7,8 @@ from utils import local_to_world_grid, world_to_local_grid, sample
 ti.init(arch=ti.gpu) 
 
 #Local Grid Properties (Note that world grid is automatically defined with the properties we defined)
-n_x = 128 #Number of cells in the x axis (j axis actually)
-n_y = 128 #Number of cells in the y axis (i axis actually)
+n_x = 256 #Number of cells in the x axis (j axis actually)
+n_y = 256 #Number of cells in the y axis (i axis actually)
 num_cells = (n_y, n_x) # (num_cells_in_y, num_cells_in_x)
 h = 1 #Grid Spacing
 #Grid Fields
@@ -57,12 +57,15 @@ inv_dt = 1.0 / dt
 density = 1.0 #Density of the fluid
 inv_density = 1.0 / density
 gravity = ti.Vector([0.0, -9.8])
-RK = 1 #Runge-Kutta Integration Order (1-2-3)
+RK = 2 #Runge-Kutta Integration Order (1-2-3)
 #Jacobi Iteration Properties
-max_iterations = 30 
+max_iterations = 30
 allowable_error = 1e-3
 
 #Rendering and GUI Properties
+window_width = n_x
+window_height = n_y
+pixels = ti.Vector.field(3, dtype=ti.f32, shape=(n_x, n_y)) #Shape is given by width x height which makes it directly compatible with the window size
 pause = False
 num_substeps = 15
 
@@ -205,7 +208,7 @@ def self_advection(uf: ti.template(), uf_new: ti.template(), vf: ti.template(), 
         for j in range(1, vf.shape[1]-1):
             #Map (i, j) to the world grid
             x, y = local_to_world_grid(i, j, num_cells, h, L_TO_W_V_OFFSET)
-            i_u, j_u = world_to_local_grid(x, y, num_cells, h, W_TO_L_V_OFFSET) #From world to u grid. Absolutely this is a mapping from v to u
+            i_u, j_u = world_to_local_grid(x, y, num_cells, h, W_TO_L_U_OFFSET) #From world to u grid. Absolutely this is a mapping from v to u
             #Sample u and v components from the corresponding grids
             v_sample = vf[i, j]
             u_sample = sample(uf, ti.Vector([i_u, j_u]))
@@ -217,7 +220,7 @@ def self_advection(uf: ti.template(), uf_new: ti.template(), vf: ti.template(), 
             elif ti.static(RK == 3):
                 backtraced_pos = RK_3(ti.Vector([x, y]), ti.Vector([u_sample, v_sample]), dt, uf, vf)
             
-            #Now we have the backtraced posiion we can sample the u value there
+            #Now we have the backtraced posiion we can sample the v value there
             i_v, j_v = world_to_local_grid(backtraced_pos[0], backtraced_pos[1], num_cells, h, W_TO_L_V_OFFSET)
             vf_new[i, j] = sample(vf, ti.Vector([i_v, j_v])) 
 
@@ -255,6 +258,7 @@ def advect_quantity(qf: ti.template(), qf_new: ti.template(), uf: ti.template(),
             #Now we have the backtraced posiion we can sample the q value there
             i_q, j_q = world_to_local_grid(backtraced_pos[0], backtraced_pos[1], num_cells, h, W_TO_L_C_OFFSET)
             qf_new[i, j] = sample(qf, ti.Vector([i_q, j_q])) 
+
 
 
 @ti.kernel
@@ -295,13 +299,13 @@ def vel_handle_no_slip_boundary_condition(uf: ti.template(), vf: ti.template()):
     
     #Set top and bottom vertical wall velocities
     for j in range(u_shape[1]):
-        uf[0, j] = uf[1, j] 
-        uf[u_shape[0]-1, j] = uf[u_shape[0]-2, j]
+        uf[0, j] = -uf[1, j] 
+        uf[u_shape[0]-1, j] = -uf[u_shape[0]-2, j]
 
     #Set left and right horizontal wall velocities
     for i in range(v_shape[0]):
-        vf[i, 0] = vf[i, 1]
-        vf[i, v_shape[1]-1] = vf[i, v_shape[1]-2]
+        vf[i, 0] = -vf[i, 1]
+        vf[i, v_shape[1]-1] = -vf[i, v_shape[1]-2]
     
 
 @ti.kernel
@@ -318,7 +322,8 @@ def compute_divergence(uf: ti.template(), vf: ti.template(), divf: ti.template()
     shape = divf.shape
     for i in range(1, shape[0]-1):
         for j in range(1, shape[1]-1):
-            divf[i, j] = ((uf[i, j+1] - uf[i, j]) / h) + ((vf[i, j] - vf[i+1, j]) / h) 
+            divf[i, j] = ((uf[i, j+1] - uf[i, j]) / h) + ((vf[i, j] - vf[i+1, j]) / h)
+
 
 
 
@@ -340,6 +345,7 @@ def p_jacobi_iteration(pf: ti.template(), pf_new: ti.template(), divf: ti.templa
     for i in range(1, shape[0]-1):
         for j in range(1, shape[1]-1):
             pf_new[i, j] = 0.25 * (pf[i+1, j] + pf[i-1, j] + pf[i, j+1] + pf[i, j-1] - (density * h * h * inv_dt) * divf[i, j])
+            #pf_new[i, j] = 0.25 * (pf[i+1, j] + pf[i-1, j] + pf[i, j+1] + pf[i, j-1] - divf[i, j])
             p_diff = ti.abs(pf_new[i, j] - pf[i, j])
             cum_p += pf_new[i, j] * pf_new[i, j]
             cum_diff += p_diff * p_diff
@@ -384,12 +390,19 @@ def projection(uf: ti.template(), uf_new: ti.template(), vf: ti.template(), vf_n
     for i in range(1, u_shape[0]-1):
         for j in range(1, u_shape[1]-1):
             uf_new[i, j] = uf[i, j] - dt * inv_density * ((pf[i, j] - pf[i, j-1]) / h) 
+            #uf_new[i, j] = uf[i, j] - ((pf[i, j] - pf[i, j-1]) / h)
+
+
 
 
     #Update v components
     for i in range(1, v_shape[0]-1):
         for j in range(1, v_shape[1]-1):
-            vf_new[i, j] = vf[i, j] - dt * inv_density * ((pf[i, j] - pf[i-1, j]) / h) 
+            vf_new[i, j] = vf[i, j] - dt * inv_density * ((pf[i-1, j] - pf[i, j]) / h) 
+            #vf_new[i, j] = vf[i, j] - ((pf[i-1, j] - pf[i, j]) / h)
+
+
+
 
 
 
@@ -398,10 +411,10 @@ def simulate():
         for substep in range(num_substeps):
             #Self advection
             self_advection(u_buffers.cur, u_buffers.next, v_buffers.cur, v_buffers.next)
-            u_buffers.swap()
-            v_buffers.swap()
             #Quantity advection
             advect_quantity(dye_buffers.cur, dye_buffers.next, u_buffers.cur, v_buffers.cur)
+            u_buffers.swap()
+            v_buffers.swap()
             dye_buffers.swap()
             #External Forces
             #apply_gravity(v_buffers.cur)
@@ -421,13 +434,17 @@ def simulate():
 
 @ti.kernel
 def init_simulation():
-    for i in range(1, dye_buffers.cur.shape[0]-1):
-        for j in range(1, dye_buffers.cur.shape[1]-1):
-            if(i // 4 + j // 4 ) % 2 == 0:
+    dye_shape = dye_buffers.cur.shape
+    for i in range(1, dye_shape[0]-1):
+        for j in range(1, dye_shape[1]-1):
+            if(i // 32 + j // 32 ) % 2 == 0:
                 dye_buffers.cur[i, j] = 1.0
-                u_buffers.cur[i, j] = 1.0
-                #v_buffers.cur[i, j] = 1.0
-    
+            
+            u_buffers.cur[i, j] = ti.random() * (i - dye_shape[0] // 2)
+            v_buffers.cur[i, j] = ti.random() * (j - dye_shape[1] // 2)
+
+
+
     p_buffers.cur.fill(0.0)
 
 
@@ -453,8 +470,18 @@ def fill_pixels(qf: ti.template()):
 
 """
 
+
+
+@ti.kernel
+def fill_pixels(qf: ti.template(), pixelf: ti.template()):
+    shape = qf.shape
+    for i, j in qf:
+        pixelf[j, shape[0]-i] = ti.Vector([qf[i, j], qf[i, j], qf[i, j]]) #Transpose and invert y to render
+
+
+
 init_simulation()
-gui = ti.GUI("Eulerian Fluid Simulation", res=(n_y, n_x))
+gui = ti.GUI("Eulerian Fluid Simulation", res=(window_width, window_height), fast_gui=True) #Window resolution is width x height
 while gui.running:
     for e in gui.get_events(gui.PRESS):
         if e.key == gui.ESCAPE:
@@ -465,6 +492,6 @@ while gui.running:
             pause = not pause
     
     simulate()
-    #fill_pixels(dye_buffers.cur)
-    gui.set_image(dye_buffers.cur)
+    fill_pixels(dye_buffers.cur, pixels)
+    gui.set_image(pixels) 
     gui.show()
