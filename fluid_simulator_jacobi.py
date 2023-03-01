@@ -57,7 +57,7 @@ inv_dt = 1.0 / dt
 density = 1.0 #Density of the fluid
 inv_density = 1.0 / density
 gravity = ti.Vector([0.0, -9.8])
-RK = 2 #Runge-Kutta Integration Order (1-2-3)
+RK = 3 #Runge-Kutta Integration Order (1-2-3)
 #Jacobi Iteration Properties
 max_iterations = 30
 allowable_error = 1e-3
@@ -67,7 +67,7 @@ window_width = n_x
 window_height = n_y
 pixels = ti.Vector.field(3, dtype=ti.f32, shape=(n_x, n_y)) #Shape is given by width x height which makes it directly compatible with the window size
 pause = False
-num_substeps = 15
+num_substeps = 5
 
 
 
@@ -270,16 +270,16 @@ def p_handle_no_slip_boundary_condition(pf: ti.template()):
     -----------
     pf: pressure field  
     """
-    #Set top and bottom solid pressures to zero
+    #Set left and right vertical wall pressures
     shape = pf.shape
-    for j in range(shape[1]):
-        pf[0, j] = 0.0
-        pf[shape[0]-1, j] = 0.0
-
-    #Set left and right solid pressures to zero
     for i in range(shape[0]):
-        pf[i, 0] = 0.0
-        pf[i, shape[1]-1] = 0.0
+        pf[i, 0] = pf[i, 1]
+        pf[i, shape[1]-1] = pf[i, shape[1]-2]
+
+    #Set top and bottom horizontal wall pressures 
+    for j in range(shape[1]):
+        pf[0, j] = pf[1, j]
+        pf[shape[0]-1, j] = pf[shape[0]-2, j]
 
 
 
@@ -297,15 +297,28 @@ def vel_handle_no_slip_boundary_condition(uf: ti.template(), vf: ti.template()):
     u_shape = uf.shape
     v_shape = vf.shape 
     
-    #Set top and bottom vertical wall velocities
+    #Set left and right vertical wall velocities to zero
+    for i in range(u_shape[0]):
+        uf[i, 0] = 0.0
+        uf[i, u_shape[1]-1] = 0.0
+    
+    #Set top and bottom vertical wall velocities to tangentially equal
     for j in range(u_shape[1]):
-        uf[0, j] = -uf[1, j] 
-        uf[u_shape[0]-1, j] = -uf[u_shape[0]-2, j]
+        uf[0, j] = uf[1, j]
+        uf[u_shape[0]-1, j] = uf[u_shape[0]-2, j]
 
-    #Set left and right horizontal wall velocities
+
+    #Set top and bottom horizontal wall velocities to zero
+    for j in range(v_shape[1]):
+        vf[0, j] = 0.0
+        vf[v_shape[0]-1, j] = 0.0
+    
+    #Set left and right horizontal wall velocities to tangentially equal
     for i in range(v_shape[0]):
-        vf[i, 0] = -vf[i, 1]
-        vf[i, v_shape[1]-1] = -vf[i, v_shape[1]-2]
+        vf[i, 0] = vf[i, 1]
+        vf[i, v_shape[1]-1] = vf[i, v_shape[1]-2]
+
+
     
 
 @ti.kernel
@@ -409,6 +422,9 @@ def projection(uf: ti.template(), uf_new: ti.template(), vf: ti.template(), vf_n
 def simulate():
     if not pause:
         for substep in range(num_substeps):
+            add_inflow(dye_buffers.cur, u_buffers.cur)
+            #Handle boundary conditions
+            vel_handle_no_slip_boundary_condition(u_buffers.cur, v_buffers.cur)
             #Self advection
             self_advection(u_buffers.cur, u_buffers.next, v_buffers.cur, v_buffers.next)
             #Quantity advection
@@ -426,8 +442,6 @@ def simulate():
             projection(u_buffers.cur, u_buffers.next, v_buffers.cur, v_buffers.next, p_buffers.cur)
             u_buffers.swap()
             v_buffers.swap()
-            #Handle boundary conditions
-            vel_handle_no_slip_boundary_condition(u_buffers.cur, v_buffers.cur)
 
 
 
@@ -437,15 +451,27 @@ def init_simulation():
     dye_shape = dye_buffers.cur.shape
     for i in range(1, dye_shape[0]-1):
         for j in range(1, dye_shape[1]-1):
-            if(i // 32 + j // 32 ) % 2 == 0:
+            if(i // 16 + j // 16 ) % 2 == 0:
                 dye_buffers.cur[i, j] = 1.0
             
-            u_buffers.cur[i, j] = ti.random() * (i - dye_shape[0] // 2)
-            v_buffers.cur[i, j] = ti.random() * (j - dye_shape[1] // 2)
+            #u_buffers.cur[i, j] = -ti.random() * (i - dye_shape[0] // 2) 
+            u_buffers.cur[i, j] = ti.random() * (dye_shape[1] - j) * 2.0 
+            #v_buffers.cur[i, j] = ti.random() * (j - dye_shape[1] // 2) 
 
 
 
     p_buffers.cur.fill(0.0)
+
+
+@ti.kernel
+def add_inflow(qf: ti.template(), uf: ti.template()):
+    shape = qf.shape
+    i_mid = shape[0] // 2
+    offset = 30 #30 cells
+    for i in range(i_mid - offset, i_mid + offset):
+        qf[i, 1] = 1.0
+        uf[i, 1] = 50.0
+
 
 
 """
@@ -480,7 +506,7 @@ def fill_pixels(qf: ti.template(), pixelf: ti.template()):
 
 
 
-init_simulation()
+#init_simulation()
 gui = ti.GUI("Eulerian Fluid Simulation", res=(window_width, window_height), fast_gui=True) #Window resolution is width x height
 while gui.running:
     for e in gui.get_events(gui.PRESS):
