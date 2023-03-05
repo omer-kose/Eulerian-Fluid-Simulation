@@ -4,11 +4,11 @@ import taichi as ti
 import utils
 from utils import local_to_world_grid, world_to_local_grid, sample
 
-ti.init(arch=ti.gpu) 
+ti.init(arch=ti.gpu)
 
 #Local Grid Properties (Note that world grid is automatically defined with the properties we defined)
-n_x = 256 #Number of cells in the x axis (j axis actually)
-n_y = 256 #Number of cells in the y axis (i axis actually)
+n_x = 512 #Number of cells in the x axis (j axis actually)
+n_y = 512 #Number of cells in the y axis (i axis actually)
 num_cells = (n_y, n_x) # (num_cells_in_y, num_cells_in_x)
 h = 1 #Grid Spacing
 #Grid Fields
@@ -18,8 +18,8 @@ u = ti.field(dtype=ti.f32, shape=(n_y, n_x+1)) #U component of the velocity
 u_second = ti.field(dtype=ti.f32, shape=(n_y, n_x+1)) #Second U Buffer
 v = ti.field(dtype=ti.f32, shape=(n_y+1, n_x)) #V component of the velocity
 v_second = ti.field(dtype=ti.f32, shape=(n_y+1, n_x)) #Second V Buffer
-dye = ti.field(dtype=ti.f32, shape=(n_y, n_x)) #Dye color
-dye_second = ti.field(dtype=ti.f32, shape=(n_y, n_x)) #Second Dye Buffer
+dye = ti.Vector.field(3, dtype=ti.f32, shape=(n_y, n_x)) #Dye color
+dye_second = ti.Vector.field(3, dtype=ti.f32, shape=(n_y, n_x)) #Second Dye Buffer
 div = ti.field(dtype=ti.f32, shape=(n_y, n_x)) #Divergence field
 #Double Buffers
 p_buffers = utils.DoubleBuffer(p, p_second)
@@ -67,8 +67,10 @@ window_width = n_x
 window_height = n_y
 pixels = ti.Vector.field(3, dtype=ti.f32, shape=(n_x, n_y)) #Shape is given by width x height which makes it directly compatible with the window size
 pause = False
-num_substeps = 5
-
+num_substeps = 1
+last_mouse_pos = ti.Vector([0.0, 0.0]) #in local grid coords (i, j)
+current_pos = ti.Vector([0.0, 0.0, 0.0])
+mouse_was_released = True
 
 
 
@@ -404,10 +406,7 @@ def projection(uf: ti.template(), uf_new: ti.template(), vf: ti.template(), vf_n
         for j in range(1, u_shape[1]-1):
             uf_new[i, j] = uf[i, j] - dt * inv_density * ((pf[i, j] - pf[i, j-1]) / h) 
             #uf_new[i, j] = uf[i, j] - ((pf[i, j] - pf[i, j-1]) / h)
-
-
-
-
+    
     #Update v components
     for i in range(1, v_shape[0]-1):
         for j in range(1, v_shape[1]-1):
@@ -416,13 +415,13 @@ def projection(uf: ti.template(), uf_new: ti.template(), vf: ti.template(), vf_n
 
 
 
-
-
-
 def simulate():
+    global last_mouse_pos
+    global current_pos
     if not pause:
         for substep in range(num_substeps):
-            add_inflow(dye_buffers.cur, u_buffers.cur)
+            if not mouse_was_released:
+                add_dye_inflow(dye_buffers.cur, u_buffers.cur, v_buffers.cur, last_mouse_pos, current_pos)
             #Handle boundary conditions
             vel_handle_no_slip_boundary_condition(u_buffers.cur, v_buffers.cur)
             #Self advection
@@ -463,38 +462,27 @@ def init_simulation():
     p_buffers.cur.fill(0.0)
 
 
-@ti.kernel
-def add_inflow(qf: ti.template(), uf: ti.template()):
-    shape = qf.shape
-    i_mid = shape[0] // 2
-    offset = 30 #30 cells
-    for i in range(i_mid - offset, i_mid + offset):
-        qf[i, 1] = 1.0
-        uf[i, 1] = 50.0
-
-
-
-"""
-window_height = n_y 
-window_width = n_x
-pixels = ti.field(dtype=ti.f32, shape=(window_height, window_width))
 
 
 @ti.kernel
-def fill_pixels(qf: ti.template()):
-    q_shape = qf.shape
-    #Number of repeats hat will be mapped onto the same pixel for each quantity.
-    num_repeat = (window_height * window_width) // (q_shape[0] * q_shape[1])
-    num_repeat = ti.cast(ti.sqrt(num_repeat), dtype=ti.i32) 
-    p = 0
-    for i, j in qf:
-        for k in range(num_repeat):
-            row = p // window_width
-            pixels[row, p - row * window_width] = qf[i, j]
-            pixels[row, p - row * window_width] = 1.0 
-            p += 1 
-
-"""
+def add_dye_inflow(qf: ti.template(), uf: ti.template(), vf: ti.template(), last_pos: ti.template(), pos: ti.template()):
+    i, j = ti.cast(pos[0], dtype=ti.i32), ti.cast(pos[1], dtype=ti.i32)
+    di, dj = i - last_pos[0], j - last_pos[1]
+    #Normalize di and dj
+    #di, dj = ti.math.sign(di), ti.math.sign(dj)
+    r = 16 # r pixel wide radius of the circle centered at i, j
+    color = ti.Vector([ti.random(), ti.random(), ti.random()])
+    for it_i in range(i - r, i + r):
+        for it_j in range(j - r, j + r):
+            dx = ti.abs(it_j - j)
+            dy = ti.abs(it_i - i)
+            if(dx * dx + dy * dy < r*r):
+                qf[it_i, it_j] += color #Add dye to the cell 
+                #Depending on di and dj set the velocity of the cell faces
+                uf[it_i, it_j] += dj / dt
+                uf[it_i, it_j+1] += dj / dt
+                vf[it_i, it_j] += -di / dt
+                vf[it_i+1, it_j] += -di / dt
 
 
 
@@ -502,22 +490,65 @@ def fill_pixels(qf: ti.template()):
 def fill_pixels(qf: ti.template(), pixelf: ti.template()):
     shape = qf.shape
     for i, j in qf:
-        pixelf[j, shape[0]-i] = ti.Vector([qf[i, j], qf[i, j], qf[i, j]]) #Transpose and invert y to render
+        pixelf[j, shape[0]-1-i] = ti.math.clamp(qf[i, j], 0.0, 1.0) #Transpose and invert y to render
+
+
+
+def mouse_screen_to_grid(pos):
+    #Get mouse press and convert it into i-j coordinates of the local grid
+    m_x, m_y = gui.get_cursor_pos()
+    i, j = (1.0 - m_y) * n_y, m_x * n_x 
+    return ti.Vector([i, j])
+
+
+@ti.kernel
+def add_boundary_source(qf: ti.template(), uf:ti.template(), vf:ti.template(), pos: ti.template(), color: ti.template(), allignment: ti.template()):
+    #allignment 0 -> horizontal left
+    #allignment 1 -> horizontal right 
+    #allignment 2 -> vertical top
+    #allignment 3 -> vertical bottom
+    num_flow_cell = 20
+    offset = num_flow_cell // 2
+    m_i, m_j = pos[0], pos[1]
+    for i in range(m_i - offset, m_i + offset):
+        for j in range(ti.max(m_j - offset, 0.0), m_j + offset):
+            qf[i, j] = color 
+            if allignment == 0:
+                uf[i, j] = -20.0
+            elif allignment == 1:
+                uf[i, j] = 20.0
+            elif allignment == 2:
+                vf[i, j] = 20.0
+            elif allignment == 3:
+                vf[i, j] = -20
 
 
 
 #init_simulation()
 gui = ti.GUI("Eulerian Fluid Simulation", res=(window_width, window_height), fast_gui=True) #Window resolution is width x height
 while gui.running:
-    for e in gui.get_events(gui.PRESS):
-        if e.key == gui.ESCAPE:
-            gui.running = False 
-        elif e.key == 'r':
-            init_simulation()
-        elif e.key == gui.SPACE:
-            pause = not pause
-    
+    #Event Handling
+    for e in gui.get_events():
+        if e.type == gui.PRESS:
+            if e.key == gui.ESCAPE:
+                gui.running = False
+            elif e.key == gui.SPACE:
+                pause = not pause
+            elif e.key == gui.LMB:
+                last_mouse_pos = mouse_screen_to_grid(e.pos)
+                mouse_was_released = False
+        elif e.type == gui.MOTION:
+            if not mouse_was_released: #LMB is held pressed
+                current_pos = mouse_screen_to_grid(e.pos)
+                #add_dye_inflow(dye_buffers.cur, u_buffers.cur, v_buffers.cur, current_pos)
+                #last_mouse_pos = current_pos
+        elif e.type == gui.RELEASE:
+            mouse_was_released = True
+
+    #Simulation and Rendering
     simulate()
+    last_mouse_pos = current_pos
     fill_pixels(dye_buffers.cur, pixels)
     gui.set_image(pixels) 
     gui.show()
+

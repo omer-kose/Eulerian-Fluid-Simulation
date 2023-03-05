@@ -98,7 +98,8 @@ def world_to_local_grid(x: ti.template(), y: ti.template(), shape: ti.template()
     """
     i, j = shape[0]-1-(y/h) + offset[0], x/h + offset[1] 
     #clamp 
-    i, j = ti.math.clamp(i, -offset[0], shape[0]-1+offset[0]), ti.math.clamp(j, -offset[1], shape[1]-1+offset[1])
+    #TODO: Right limit should be adjusted wrt centered and staggered grid. Not that much important for now
+    i, j = ti.math.clamp(i, 0, shape[0]-1), ti.math.clamp(j, 0, shape[1]-1)
     
     return i, j 
 
@@ -120,3 +121,4 @@ def sample(f: ti.template(), p: ti.template()) -> ti.f32:
     ip, jp = ti.min(i+1, f.shape[0]-1), ti.min(j+1, f.shape[1]-1)
     t, s = p[0] - i, p[1] - j
     return (f[i, j] * (1-s) + f[i, jp] * s) * (1-t) + (f[ip, j] * (1-s) + f[ip, jp] * s) * t
+
