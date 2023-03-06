@@ -1,8 +1,9 @@
 import taichi as ti
+import random
 
 
 import utils
-from utils import local_to_world_grid, world_to_local_grid, sample
+from utils import local_to_world_grid, world_to_local_grid, sample, HSV_to_RGB
 
 ti.init(arch=ti.gpu)
 
@@ -59,8 +60,11 @@ inv_density = 1.0 / density
 gravity = ti.Vector([0.0, -9.8])
 RK = 3 #Runge-Kutta Integration Order (1-2-3)
 #Jacobi Iteration Properties
-max_iterations = 30
+max_iterations = 50
 allowable_error = 1e-3
+#Dissipation to control the diffusion
+dye_dissipation = 0.7
+velocity_dissipation = 0.0
 
 #Rendering and GUI Properties
 window_width = n_x
@@ -68,9 +72,11 @@ window_height = n_y
 pixels = ti.Vector.field(3, dtype=ti.f32, shape=(n_x, n_y)) #Shape is given by width x height which makes it directly compatible with the window size
 pause = False
 num_substeps = 1
-last_mouse_pos = ti.Vector([0.0, 0.0]) #in local grid coords (i, j)
-current_pos = ti.Vector([0.0, 0.0, 0.0])
+mouse_press_pos = ti.Vector([0.0, 0.0]) #in local grid coords (i, j)
+current_pos = ti.Vector([0.0, 0.0])
 mouse_was_released = True
+mouse_was_moved = False
+dye_splat_radius = 24
 
 
 
@@ -184,6 +190,7 @@ def self_advection(uf: ti.template(), uf_new: ti.template(), vf: ti.template(), 
     vf: current v velocity buffer to read from (cur)
     vf_new: next v velocity buffer to write onto (next)
     """
+    inv_decay = 1.0 / (1.0 + dt * velocity_dissipation)
     #Loop over the fluid u components
     for i in range(1, uf.shape[0]-1):
         for j in range(1, uf.shape[1]-1):
@@ -203,7 +210,7 @@ def self_advection(uf: ti.template(), uf_new: ti.template(), vf: ti.template(), 
             
             #Now we have the backtraced position we can sample the u value there
             i_u, j_u = world_to_local_grid(backtraced_pos[0], backtraced_pos[1], num_cells, h, W_TO_L_U_OFFSET)
-            uf_new[i, j] = sample(uf, ti.Vector([i_u, j_u]))            
+            uf_new[i, j] = sample(uf, ti.Vector([i_u, j_u])) * inv_decay          
             
     #Loop over the fluid v components
     for i in range(1, vf.shape[0]-1):
@@ -224,7 +231,7 @@ def self_advection(uf: ti.template(), uf_new: ti.template(), vf: ti.template(), 
             
             #Now we have the backtraced posiion we can sample the v value there
             i_v, j_v = world_to_local_grid(backtraced_pos[0], backtraced_pos[1], num_cells, h, W_TO_L_V_OFFSET)
-            vf_new[i, j] = sample(vf, ti.Vector([i_v, j_v])) 
+            vf_new[i, j] = sample(vf, ti.Vector([i_v, j_v])) * inv_decay
 
 
 @ti.kernel
@@ -239,6 +246,7 @@ def advect_quantity(qf: ti.template(), qf_new: ti.template(), uf: ti.template(),
     uf: u component of the velocity field
     vf: v component of the velocity field
     """
+    inv_decay = 1.0 / (1.0 + dt * dye_dissipation)
     shape = qf.shape
     for i in range(1, shape[0]-1):
         for j in range(1, shape[1]-1):
@@ -259,7 +267,7 @@ def advect_quantity(qf: ti.template(), qf_new: ti.template(), uf: ti.template(),
 
             #Now we have the backtraced posiion we can sample the q value there
             i_q, j_q = world_to_local_grid(backtraced_pos[0], backtraced_pos[1], num_cells, h, W_TO_L_C_OFFSET)
-            qf_new[i, j] = sample(qf, ti.Vector([i_q, j_q])) 
+            qf_new[i, j] = sample(qf, ti.Vector([i_q, j_q])) * inv_decay
 
 
 
@@ -405,23 +413,149 @@ def projection(uf: ti.template(), uf_new: ti.template(), vf: ti.template(), vf_n
     for i in range(1, u_shape[0]-1):
         for j in range(1, u_shape[1]-1):
             uf_new[i, j] = uf[i, j] - dt * inv_density * ((pf[i, j] - pf[i, j-1]) / h) 
-            #uf_new[i, j] = uf[i, j] - ((pf[i, j] - pf[i, j-1]) / h)
     
     #Update v components
     for i in range(1, v_shape[0]-1):
         for j in range(1, v_shape[1]-1):
             vf_new[i, j] = vf[i, j] - dt * inv_density * ((pf[i-1, j] - pf[i, j]) / h) 
-            #vf_new[i, j] = vf[i, j] - ((pf[i-1, j] - pf[i, j]) / h)
+
+
+
+@ti.kernel
+def add_dye_inflow(qf: ti.template(), uf: ti.template(), vf: ti.template(), press_pos_i: ti.f32, press_pos_j: ti.f32, pos_i: ti.f32, pos_j: ti.f32, r : ti.i32):
+    """
+    Adds dye inflow into the grid depending on the mouse input.
+
+    Parameters:
+    -----------
+    qf: quantity (dye) field
+    uf: velocity u component field
+    vf: velocity v component field
+    press_pos_i, press_pos_j: The position where the mouse was last pressed.
+    pos_i, pos_j: The current position of the mouse in the current frame
+    r: pixel wide radius of the circle centered at pos
+    Note:
+    ----
+    press_pos and pos are actually vectors in the code. But when I try to pass them with ti.template as reference the simulation frames goes down incredibly. As a remedy, I pass them by unrolling their content and passing them by value.
+    """
+    i, j = ti.cast(pos_i, dtype=ti.i32), ti.cast(pos_j, dtype=ti.i32)
+    di, dj = i - ti.cast(press_pos_i, dtype=ti.i32), j - ti.cast(press_pos_j, dtype=ti.i32)
+    #color = ti.Vector([1.5 * ti.random(), 1.5 * ti.random(), 1.5 * ti.random()])
+    color = 1.5 * HSV_to_RGB(ti.random(), 1.0, 1.0)
+    for it_i in range(ti.max(0, i - r), ti.min(i + r, n_y-1)):
+        for it_j in range(ti.max(0, j - r), ti.min(j + r, n_x-1)):
+            dx = ti.abs(it_j - j)
+            dy = ti.abs(it_i - i)
+            dist_sq = dx * dx + dy * dy
+            if(dist_sq < r*r):
+                splat = ti.exp(-dist_sq / r) * color
+                qf[it_i, it_j] += splat #Add dye to the cell 
+                #Depending on di and dj set the velocity of the cell faces
+                uf[it_i, it_j] = dj / dt
+                uf[it_i, it_j+1] = dj / dt
+                vf[it_i, it_j] = -di / dt
+                vf[it_i+1, it_j] = -di / dt
+
+
+@ti.kernel
+def fill_pixels(qf: ti.template(), pixelf: ti.template()):
+    """
+    Fills the pixel buffer given the quantity field. This function was necessary as the grid I use and screen buffer was alligned differently.
+
+    Parameters:
+    -----------
+    qf: quantity field
+    pixelf: pixel buffer
+    """
+    shape = qf.shape
+    for i, j in qf:
+        pixelf[j, shape[0]-1-i] = ti.math.clamp(qf[i, j], 0.0, 1.0) #Transpose and invert y to render
+
+
+
+def mouse_screen_to_grid(pos):
+    #Get mouse press and convert it into i-j coordinates of the local grid
+    m_x, m_y = gui.get_cursor_pos()
+    i, j = (1.0 - m_y) * n_y, m_x * n_x 
+    return ti.Vector([i, j])
+
+
+@ti.kernel
+def add_flow_window(qf: ti.template(), uf:ti.template(), vf:ti.template(), pos_i: ti.f32, pos_j: ti.f32, num_flow_cells: ti.i32, allignment: ti.int32, speed: ti.f32):
+    """
+    Adds a flow window source that emits quantity regularly
+
+    Parameters:
+    -----------
+    qf: quantity (dye) field
+    uf: velocity u component field
+    vf: velocity v component field
+    pos_i, pos_j: Position of the window
+    num_flow_cells: How many cells the window exists of 
+    allignment: In which direction the window creates the flow
+    color_r, color_g, color_b: RGB color of the flow
+
+    allignment 0 -> horizontal left
+    allignment 1 -> horizontal right 
+    allignment 2 -> vertical up
+    allignment 3 -> vertical down
+    
+    Note:
+    ----
+    pos are actually vectors in the code. But when I try to pass them with ti.template as reference the simulation frames goes down incredibly. As a remedy, I pass them by unrolling their content and passing them by value.
+    """
+    color = 1.5 * HSV_to_RGB(ti.random(), 1.0, 1.0)
+    offset = num_flow_cells // 2
+    m_i, m_j = ti.cast(pos_i, dtype=ti.i32), ti.cast(pos_j, dtype=ti.i32)
+    for i in range(ti.max(0, m_i - offset), ti.min(m_i + offset, n_y)):
+        for j in range(ti.max(0, m_j - offset), ti.min(m_j + offset, n_x)):
+            qf[i, j] = color 
+            if allignment == 0:
+                uf[i, j] = -speed
+                uf[i, j+1] = -speed
+                vf[i, j] = 0.0
+                vf[i+1, j] = 0.0
+            elif allignment == 1:
+                uf[i, j] = speed
+                uf[i, j+1] = speed
+                vf[i, j] = 0.0
+                vf[i+1, j] = 0.0
+            elif allignment == 2:
+                uf[i, j] = 0.0
+                uf[i, j+1] = 0.0
+                vf[i, j] = speed
+                vf[i+1, j] = speed
+            elif allignment == 3:
+                uf[i, j] = 0.0
+                uf[i, j+1] = 0.0
+                vf[i, j] = -speed
+                vf[i+1, j] = -speed
+    
+    
+
+@ti.kernel
+def reset():
+    dye_buffers.cur.fill(0.0)
+    dye_buffers.next.fill(0.0)
+    u_buffers.cur.fill(0.0)
+    u_buffers.next.fill(0.0)
+    v_buffers.cur.fill(0.0)
+    v_buffers.next.fill(0.0)
+    p_buffers.cur.fill(0.0)
+    p_buffers.next.fill(0.0)
+
 
 
 
 def simulate():
-    global last_mouse_pos
+    global mouse_press_pos
     global current_pos
     if not pause:
         for substep in range(num_substeps):
-            if not mouse_was_released:
-                add_dye_inflow(dye_buffers.cur, u_buffers.cur, v_buffers.cur, last_mouse_pos, current_pos)
+            #Add flow
+            #add_flow_window(dye_buffers.cur, u_buffers.cur, v_buffers.cur, n_y // 2, 1, 20, 1, 100.0)
+            if not mouse_was_released and mouse_was_moved:
+                add_dye_inflow(dye_buffers.cur, u_buffers.cur, v_buffers.cur, mouse_press_pos[0], mouse_press_pos[1], current_pos[0], current_pos[1], dye_splat_radius)
             #Handle boundary conditions
             vel_handle_no_slip_boundary_condition(u_buffers.cur, v_buffers.cur)
             #Self advection
@@ -443,90 +577,9 @@ def simulate():
             v_buffers.swap()
 
 
-
-
-@ti.kernel
-def init_simulation():
-    dye_shape = dye_buffers.cur.shape
-    for i in range(1, dye_shape[0]-1):
-        for j in range(1, dye_shape[1]-1):
-            if(i // 16 + j // 16 ) % 2 == 0:
-                dye_buffers.cur[i, j] = 1.0
-            
-            #u_buffers.cur[i, j] = -ti.random() * (i - dye_shape[0] // 2) 
-            u_buffers.cur[i, j] = ti.random() * (dye_shape[1] - j) * 2.0 
-            #v_buffers.cur[i, j] = ti.random() * (j - dye_shape[1] // 2) 
-
-
-
-    p_buffers.cur.fill(0.0)
-
-
-
-
-@ti.kernel
-def add_dye_inflow(qf: ti.template(), uf: ti.template(), vf: ti.template(), last_pos: ti.template(), pos: ti.template()):
-    i, j = ti.cast(pos[0], dtype=ti.i32), ti.cast(pos[1], dtype=ti.i32)
-    di, dj = i - last_pos[0], j - last_pos[1]
-    #Normalize di and dj
-    #di, dj = ti.math.sign(di), ti.math.sign(dj)
-    r = 16 # r pixel wide radius of the circle centered at i, j
-    color = ti.Vector([ti.random(), ti.random(), ti.random()])
-    for it_i in range(i - r, i + r):
-        for it_j in range(j - r, j + r):
-            dx = ti.abs(it_j - j)
-            dy = ti.abs(it_i - i)
-            if(dx * dx + dy * dy < r*r):
-                qf[it_i, it_j] += color #Add dye to the cell 
-                #Depending on di and dj set the velocity of the cell faces
-                uf[it_i, it_j] += dj / dt
-                uf[it_i, it_j+1] += dj / dt
-                vf[it_i, it_j] += -di / dt
-                vf[it_i+1, it_j] += -di / dt
-
-
-
-@ti.kernel
-def fill_pixels(qf: ti.template(), pixelf: ti.template()):
-    shape = qf.shape
-    for i, j in qf:
-        pixelf[j, shape[0]-1-i] = ti.math.clamp(qf[i, j], 0.0, 1.0) #Transpose and invert y to render
-
-
-
-def mouse_screen_to_grid(pos):
-    #Get mouse press and convert it into i-j coordinates of the local grid
-    m_x, m_y = gui.get_cursor_pos()
-    i, j = (1.0 - m_y) * n_y, m_x * n_x 
-    return ti.Vector([i, j])
-
-
-@ti.kernel
-def add_boundary_source(qf: ti.template(), uf:ti.template(), vf:ti.template(), pos: ti.template(), color: ti.template(), allignment: ti.template()):
-    #allignment 0 -> horizontal left
-    #allignment 1 -> horizontal right 
-    #allignment 2 -> vertical top
-    #allignment 3 -> vertical bottom
-    num_flow_cell = 20
-    offset = num_flow_cell // 2
-    m_i, m_j = pos[0], pos[1]
-    for i in range(m_i - offset, m_i + offset):
-        for j in range(ti.max(m_j - offset, 0.0), m_j + offset):
-            qf[i, j] = color 
-            if allignment == 0:
-                uf[i, j] = -20.0
-            elif allignment == 1:
-                uf[i, j] = 20.0
-            elif allignment == 2:
-                vf[i, j] = 20.0
-            elif allignment == 3:
-                vf[i, j] = -20
-
-
-
-#init_simulation()
 gui = ti.GUI("Eulerian Fluid Simulation", res=(window_width, window_height), fast_gui=True) #Window resolution is width x height
 while gui.running:
+    mouse_was_moved = False
     #Event Handling
     for e in gui.get_events():
         if e.type == gui.PRESS:
@@ -534,21 +587,24 @@ while gui.running:
                 gui.running = False
             elif e.key == gui.SPACE:
                 pause = not pause
+            elif e.key == 'r':
+                reset()
             elif e.key == gui.LMB:
-                last_mouse_pos = mouse_screen_to_grid(e.pos)
+                mouse_press_pos = mouse_screen_to_grid(e.pos)
                 mouse_was_released = False
         elif e.type == gui.MOTION:
             if not mouse_was_released: #LMB is held pressed
                 current_pos = mouse_screen_to_grid(e.pos)
-                #add_dye_inflow(dye_buffers.cur, u_buffers.cur, v_buffers.cur, current_pos)
-                #last_mouse_pos = current_pos
+                mouse_was_moved = True
         elif e.type == gui.RELEASE:
             mouse_was_released = True
 
     #Simulation and Rendering
     simulate()
-    last_mouse_pos = current_pos
+    mouse_press_pos = current_pos
     fill_pixels(dye_buffers.cur, pixels)
     gui.set_image(pixels) 
     gui.show()
+
+
 

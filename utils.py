@@ -122,3 +122,42 @@ def sample(f: ti.template(), p: ti.template()) -> ti.f32:
     t, s = p[0] - i, p[1] - j
     return (f[i, j] * (1-s) + f[i, jp] * s) * (1-t) + (f[ip, j] * (1-s) + f[ip, jp] * s) * t
 
+
+
+
+@ti.func
+def HSV_to_RGB(h: ti.f32, s: ti.f32, v: ti.f32):
+    i = ti.floor(h * 6)
+    f = h * 6 - i
+    p = v * (1 - s)
+    q = v * (1 - f * s)
+    t = v * (1 - (1 - f) * s)
+    r = 0.0
+    g = 0.0
+    b = 0.0
+    if i ==  0:
+        r = v
+        g = t 
+        b = p
+    if i ==  1:
+        r = q 
+        g = v 
+        b = p
+    if i ==  2: 
+        r = p 
+        g = v 
+        b = t
+    if i ==  3: 
+        r = p 
+        g = q 
+        b = v
+    if i ==  4: 
+        r = t 
+        g = p 
+        b = v
+    if i ==  5: 
+        r = v 
+        g = p 
+        b = q
+    
+    return ti.Vector([r, g, b])
