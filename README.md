@@ -69,7 +69,7 @@ I implemented RK-1, RK-2 and RK-3 time integrators. Below, the comparison betwee
 
 <div align="center">
   <video src="https://user-images.githubusercontent.com/44121631/223452499-fe514980-0b8e-4c13-bb58-017eda7900dd.mov" width=400/>
-<div/>
+</div>
 
 
 
