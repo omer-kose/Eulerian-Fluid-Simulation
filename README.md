@@ -66,5 +66,15 @@ I implemented RK-1, RK-2 and RK-3 time integrators. Below, the comparison betwee
 </tr></table>
 
 
+# References
 
+[Bridson and Müller Siggraph 2007 Course Notes](https://www.cs.ubc.ca/~rbridson/fluidsimulation/fluids_notes.pdf)
+
+[Taichi Documentation](https://docs.taichi-lang.org/)
+
+[Taichi Fluids Repository](https://github.com/houkensjtu/taichi-fluid)
+
+[WebGL Fluid Simulation](https://github.com/PavelDoGreat/WebGL-Fluid-Simulation)
+
+[Nvidia GPU Gems Chapter 38](https://developer.nvidia.com/gpugems/gpugems/part-vi-beyond-triangles/chapter-38-fast-fluid-dynamics-simulation-gpu)
 
