@@ -24,7 +24,7 @@ It is hard to find people explaining the grid logic and index conversion they us
 
 ### Properties of the World Grid
   - The origin lies at the bottom-left. The cell centers are used as the cell indices. 
-  - The math, like derivative computation and time integration, is done in this grid as it is more natural to me.
+  - The math, like derivative computation and time integration, is done in this grid as it feels more natural to me.
   - This grid serves as the canonical domain for all of the grids. As seen in the code, see advection functions, while converting indices from one field to the other; this grid is used as the intermediate domain. The idea resembles the similarity transformation from Linear Algebra.
   - This grid is purely conceptual. It is not stored in the memory.
   
