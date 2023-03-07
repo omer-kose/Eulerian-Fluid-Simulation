@@ -25,7 +25,7 @@ It is hard to find people explaining the grid logic and index conversion they us
   
  
  
-# Some Examples and Comparisons 
+# Some Results
 
 ## Different Time Integration Schemes
 I implemented RK-1, RK-2 and RK-3 time integrators. Below, the comparison between them can be seen.
