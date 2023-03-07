@@ -76,7 +76,7 @@ I implemented RK-1, RK-2 and RK-3 time integrators. Below, the comparison betwee
 
 
 # TODO
- - Implementing Conjuage Gradient Method for Pressure Computation.
+ - Implementing Conjugate Gradient Method for Pressure Computation.
  - Making the timestep adaptable as described in the Bridson and Müller's notes.
 
 
