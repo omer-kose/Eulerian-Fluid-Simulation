@@ -17,7 +17,7 @@ I have implemented an Eulerian Fluid Simulation where grid is represented by a s
 It is hard to find people explaining the grid logic and index conversion they used in their code. I do not prefer converting indices in place in the code without explicitly stating in which grid the computation is done. The allocated fields are stored in row-major order whose origin is at the top-left. The cell centers are used as the cell indices. In other words, I use the classical multi-dimensional array convention. I did not want to do the math in this grid. Thus, I created a canonical grid which I call the world grid. 
 
 
-### Properties of the World Grid
+### Properties of the Local Grid
   - The origin lies at the top-left. The cell centers are used as the cell indices. 
   - Fields are stored in this grid.
   - Sampling is done in this field.
