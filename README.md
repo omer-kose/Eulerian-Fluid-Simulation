@@ -38,14 +38,5 @@ I implemented RK-1, RK-2 and RK-3 time integrators. Below, the comparison betwee
 <div align="center">
   <video src="https://user-images.githubusercontent.com/44121631/223439086-5122cc6c-c43f-4591-800e-f7beaf0d47cc.mov" width=400/>
 <div/>
- 
- <p align="center">
-<strong>RK-2</strong>
-</p>
- 
- <div align="center">
-  <video src="https://user-images.githubusercontent.com/44121631/223442377-31395549-e21c-4ccb-839d-c65ad6975fc6.mov" width=400/>
-<div/>
- 
- 
+
 
