@@ -3,10 +3,15 @@
 I have implemented an Eulerian Fluid Simulation where grid is represented by a staggered MAC Grid. 
 
 # Implementation Details 
- - Implementation is done with Taichi
- - Velocity field lies on the cell faces
+ - Implementation is done with Taichi.
+ - Velocity field lies on the cell faces.
  - Pressure and Quantity (dye in this case) fields lie in the cell centers.
- - Pressure is currently computed using Jacobi Iterations
+ - Pressure is currently computed using Jacobi Iterations.
+
+## Controls
+ - With left click user can add dye into the simulation.
+ - Space can be used to stop the simulation.
+ - With 'r' key the simulation can be reset.
  
 ## The Local and World Grid Logic
 It is hard to find people explaining the grid logic and index conversion they used in their code. I do not prefer converting indices in place in the code without explicitly stating in which grid the computation is done. The allocated fields are stored in row-major order whose origin is at the top-left. The cell centers are used as the cell indices. In other words, I use the classical multi-dimensional array convention. I did not want to do the math in this grid. Thus, I created a canonical grid which I call the world grid. 
@@ -59,6 +64,7 @@ I implemented RK-1, RK-2 and RK-3 time integrators. Below, the comparison betwee
   </p>
 </td>
 </tr></table>
+
 
 
 
